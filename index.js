@@ -2,7 +2,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const express = require('express')
 const cors = require("cors")
 require('dotenv').config()
-
+var jwt = require('jsonwebtoken');
 const app = express()
 const PORT = process.env.PORT || 5000;
 
@@ -10,6 +10,22 @@ const PORT = process.env.PORT || 5000;
 // middleware
 app.use(express.json())
 app.use(cors())
+//  verify user middleware
+const verifyUser = (req, res, next) =>{
+  const authorization = req.header.authorization;
+  console.log(authorization)
+  if (!authorization) {
+    res.status(401).send({error: true, message: 'unauthorized Access' })
+  }
+  const token = authorization.split(' ')[1]
+  jwt.verify(token, process.env.USER_ACCESS_TOKEN, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({error: true, message: 'unauthorized access'})
+    }
+    req.decoded = decoded;
+    next()
+  })
+}
 // database connection 
 
 // cloud DB
@@ -34,10 +50,41 @@ async function run() {
     const cartCollection = client.db("bistroDB").collection("carts");
     const usersCollection = client.db("bistroDB").collection("users");
 
+    // jwt 
+    app.post('/jwt', (req, res)=>{
+      const user = req.body;
+      const token = jwt.sign(user, process.env.USER_ACCESS_TOKEN, {expiresIn: "1h"});
+      res.send({token});
+    })
+
     // users data store 
     app.post("/users", async (req,res) => {
       const user = req.body;
+      const query = {userEmail: user.userEmail}
+      const existingUser = await usersCollection.findOne(query);
+      if (existingUser) {
+        return res.send({message: "user Already Exist"})
+      }
       const result = await usersCollection.insertOne(user)
+      res.send(result)
+    })
+
+    // get user
+    app.get("/users", verifyUser, async (req, res) => {
+      const users = await usersCollection.find().toArray();
+      res.send(users)
+    })
+
+    //  set user roll
+    app.patch("/users/admin/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = {_id: new ObjectId(id)}
+      const updateUser = {
+        $set: {
+          role : "admin"
+        }
+      }
+      const result = await usersCollection.updateOne(query, updateUser)
       res.send(result)
     })
   // get all menu
@@ -53,22 +100,26 @@ async function run() {
     })
 
     // add to cart menu
-    app.post("/carts", async(req, res ) => {
+    app.post("/carts",  async(req, res ) => {
       const item = req.body;
       const result = await cartCollection.insertOne(item);
       res.send(result);
     })
 
     // get cart data by user email 
-    app.get('/carts/', async (req, res) => {
+    app.get('/carts/',verifyUser, async (req, res) => {
       const email = req.query.email;
       if (!email) {
         res.send([])
-      } else {
+      } 
+      const decodedEmail = req.decoded.email;
+      if (email !== decodedEmail) {
+        return res.status(403).send({error: true, message: "forbidden  access"})
+      }
         const query = {email: email}
         const result = await cartCollection.find(query).toArray()
         res.send(result)
-      }
+      
     } )
 
     // delete cart item 
